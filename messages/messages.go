@@ -23,7 +23,15 @@ type UnstricMessage struct {
 	Message[any]
 }
 
-type WMessageBody struct {
+type IncomingMessageBody struct {
+	ClientID   uint   `json:"client_id"`
+	CompanyID  uint   `json:"company_id"`
+	InstanceID uint   `json:"instance_id"`
+	Message    string `json:"message"`
+	Link       string `json:"link"`
+}
+
+type SendingMessageBody struct {
 	ClientID   uint   `json:"client_id"`
 	CompanyID  uint   `json:"company_id"`
 	InstanceID uint   `json:"instance_id"`
@@ -31,11 +39,11 @@ type WMessageBody struct {
 }
 
 type IncomingMessage struct {
-	Message[WMessageBody]
+	Message[IncomingMessageBody]
 }
 
 type SendingMessage struct {
-	Message[WMessageBody]
+	Message[SendingMessageBody]
 }
 
 type HeadOnly struct {
