@@ -1,108 +1,201 @@
-// File: unilog.go
-package unilog
+package logger
 
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
-// JSONFormatter is a custom Logrus formatter that outputs JSON logs
-// in the specific structure you requested.
+// Global loggers map and sync lock
+var (
+	loggers       = make(map[string]*logrus.Logger) // Stores multiple named loggers
+	defaultLogger *logrus.Logger                    // Default logger (when no name is given)
+	loggersMu     sync.RWMutex                      // Ensures thread safety
+	once          sync.Once                         // Ensures loggers are initialized only once
+)
+
+// JSONFormatter formats logs in JSON style
 type JSONFormatter struct {
 	LoggerName string
 }
 
-// Format builds the log output in JSON form, e.g.:
-//
-//	{
-//	  "time": "2025-01-22T12:00:00.000Z",
-//	  "level": "INFO",
-//	  "logger": "example_logger",
-//	  "line": 34,
-//	  "msg": "Application started"
-//	}
+// Format ensures logs match this JSON structure:
+// {"time":"2025-01-22T12:00:00.000Z","level":"INFO","logger":"example_logger","line":34,"msg":"Application started"}
 func (jf *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
-	// Default fields
-	level := strings.ToUpper(entry.Level.String())
-	msg := entry.Message
 	timestamp := entry.Time.UTC().Format(time.RFC3339Nano)
+	level := strings.ToUpper(entry.Level.String())
+	msg := escapeString(entry.Message)
 
-	// Extract caller line number if available
-	var lineNum int
+	lineNum := 0
 	if entry.HasCaller() {
 		lineNum = entry.Caller.Line
 	}
 
-	// Build your desired JSON structure manually
-	logLine := fmt.Sprintf(`{"time":"%s","level":"%s","logger":"%s","line":%d,"msg":"%s"}`+"\n",
-		timestamp, level, jf.LoggerName, lineNum, escapeString(msg),
+	logLine := fmt.Sprintf(
+		`{"time":"%s","level":"%s","logger":"%s","line":%d,"msg":"%s"}`+"\n",
+		timestamp, level, jf.LoggerName, lineNum, msg,
 	)
-
 	return []byte(logLine), nil
 }
 
-// Logger wraps a *logrus.Logger with your custom setup.
-type Logger struct {
-	*logrus.Logger
-	name string
+// InitializeLogger sets up a named logger and stores it in `loggers`
+func InitializeLogger(loggerName, levelString, logsDir string) error {
+	loggersMu.Lock()
+	defer loggersMu.Unlock()
+
+	// If logger already exists, do nothing
+	if _, exists := loggers[loggerName]; exists {
+		return nil
+	}
+
+	// Ensure logsDir exists
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create logs directory: %w", err)
+	}
+
+	// Create logger
+	logger, err := newLogger(loggerName, levelString, logsDir)
+	if err != nil {
+		return err
+	}
+
+	loggers[loggerName] = logger
+	return nil
 }
 
-// NewLogger creates a new logger that writes JSON logs to a file
-// and includes your custom JSON format.
-//
-//	name:         "example_logger" (appears in the "logger" field)
-//	levelString:  e.g. "info", "debug", "warn", "error", ...
-//	filePath:     path to the output log file
-func NewLogger(name, levelString, filePath string) (*Logger, error) {
-	log := logrus.New()
+// InitializeDefaultLogger sets up a default logger that is used when no logger is specified.
+func InitializeDefaultLogger(levelString, logsDir string) error {
+	var err error
+	once.Do(func() {
+		loggersMu.Lock()
+		defer loggersMu.Unlock()
 
-	// Parse log level
+		// Ensure logsDir exists
+		if err = os.MkdirAll(logsDir, 0o755); err != nil {
+			err = fmt.Errorf("failed to create logs directory: %w", err)
+			return
+		}
+
+		// Create default logger
+		defaultLogger, err = newLogger("default", levelString, logsDir)
+	})
+	return err
+}
+
+// GetLogger retrieves a named logger or falls back to defaultLogger
+func GetLogger(loggerName string) *logrus.Logger {
+	loggersMu.RLock()
+	defer loggersMu.RUnlock()
+
+	if logger, exists := loggers[loggerName]; exists {
+		return logger
+	}
+	if defaultLogger != nil {
+		return defaultLogger
+	}
+	panic("Logger not initialized. Call InitializeLogger() or InitializeDefaultLogger() first.")
+}
+
+// newLogger is a helper function to create a logrus.Logger
+func newLogger(loggerName, levelString, logsDir string) (*logrus.Logger, error) {
+	logFilePath := filepath.Join(logsDir, loggerName+".log")
+
+	// Create or append to the log file
+	file, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %q: %w", logFilePath, err)
+	}
+
+	logger := logrus.New()
+	logger.SetOutput(file)
+	logger.SetReportCaller(true) // Enables line numbers
+	logger.SetFormatter(&JSONFormatter{LoggerName: loggerName})
+
 	level, err := logrus.ParseLevel(levelString)
 	if err != nil {
-		return nil, fmt.Errorf("invalid log level: %w", err)
+		return nil, fmt.Errorf("invalid log level %q: %w", levelString, err)
 	}
-	log.SetLevel(level)
+	logger.SetLevel(level)
 
-	// Create or append to log file
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
-	}
-
-	// Tell logrus to write to file
-	log.SetOutput(file)
-
-	// Enable Caller info so we know the code line
-	log.SetReportCaller(true)
-
-	// Attach the custom JSON formatter
-	log.SetFormatter(&JSONFormatter{
-		LoggerName: name,
-	})
-
-	return &Logger{Logger: log, name: name}, nil
+	return logger, nil
 }
 
-// escapeString escapes quotation marks to keep JSON valid
+// escapeString handles JSON escaping
 func escapeString(s string) string {
 	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
-// Info logs an INFO level message
-func (l *Logger) Info(msg string) {
-	l.Logger.Info(msg)
+// -----------------------------------------------------------------------------
+// Logging functions with designated loggers
+
+func Info(loggerName, msg string) {
+	GetLogger(loggerName).Info(msg)
 }
 
-// Debug logs a DEBUG level message
-func (l *Logger) Debug(msg string) {
-	l.Logger.Debug(msg)
+func Debug(loggerName, msg string) {
+	GetLogger(loggerName).Debug(msg)
 }
 
-// Error logs an ERROR level message
-func (l *Logger) Error(msg string) {
-	l.Logger.Error(msg)
+func Warn(loggerName, msg string) {
+	GetLogger(loggerName).Warn(msg)
+}
+
+func Error(loggerName, msg string) {
+	GetLogger(loggerName).Error(msg)
+}
+
+func Infof(loggerName, format string, args ...interface{}) {
+	GetLogger(loggerName).Infof(format, args...)
+}
+
+func Debugf(loggerName, format string, args ...interface{}) {
+	GetLogger(loggerName).Debugf(format, args...)
+}
+
+func Warnf(loggerName, format string, args ...interface{}) {
+	GetLogger(loggerName).Warnf(format, args...)
+}
+
+func Errorf(loggerName, format string, args ...interface{}) {
+	GetLogger(loggerName).Errorf(format, args...)
+}
+
+// -----------------------------------------------------------------------------
+// Logging functions for default logger (no loggerName needed)
+
+func DefaultInfo(msg string) {
+	GetLogger("default").Info(msg)
+}
+
+func DefaultDebug(msg string) {
+	GetLogger("default").Debug(msg)
+}
+
+func DefaultWarn(msg string) {
+	GetLogger("default").Warn(msg)
+}
+
+func DefaultError(msg string) {
+	GetLogger("default").Error(msg)
+}
+
+func DefaultInfof(format string, args ...interface{}) {
+	GetLogger("default").Infof(format, args...)
+}
+
+func DefaultDebugf(format string, args ...interface{}) {
+	GetLogger("default").Debugf(format, args...)
+}
+
+func DefaultWarnf(format string, args ...interface{}) {
+	GetLogger("default").Warnf(format, args...)
+}
+
+func DefaultErrorf(format string, args ...interface{}) {
+	GetLogger("default").Errorf(format, args...)
 }
