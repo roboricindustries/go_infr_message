@@ -27,10 +27,18 @@ func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	}
 
 	msg := escapeString(entry.Message)
-	logLine := fmt.Sprintf(
-		`{"time":"%s","level":"%s","line":%d,"msg":"%s"}`+"\n",
+	// Build base JSON
+	logLine := fmt.Sprintf(`{"time":"%s","level":"%s","line":%d,"msg":"%s"`,
 		timestamp, level, line, msg,
 	)
+
+	// Include extra fields from entry.Data (like latency, client_ip, etc.)
+	for k, v := range entry.Data {
+		logLine += fmt.Sprintf(`,"%s":"%v"`, k, v)
+	}
+
+	// Close the JSON object
+	logLine += "}\n"
 	return []byte(logLine), nil
 }
 
