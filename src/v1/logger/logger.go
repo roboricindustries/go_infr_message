@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // JSONFormatter defines your custom JSON log format
@@ -89,24 +90,29 @@ func NewLogger(logDir, logFile, logLevel string, withErrorFile bool) *logrus.Log
 
 	// Main log file
 	mainLogPath := filepath.Join(logDir, logFile)
-	mainFile, err := os.OpenFile(mainLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		panic(fmt.Sprintf("failed to open main log file %q: %v", mainLogPath, err))
+	mainLogger := &lumberjack.Logger{
+		Filename:   mainLogPath,
+		MaxSize:    10, // 10MB per file
+		MaxBackups: 3,  // Keep 3 rotated files
+		MaxAge:     30, // Keep logs for 30 days (adjustable)
+		Compress:   true,
 	}
-	// Direct main logger output to mainFile
-	l.SetOutput(mainFile)
+	l.SetOutput(mainLogger)
 
 	// If withErrorFile is true, create a second file for error+ logs
 	if withErrorFile {
 		errorFilename := buildErrorFilename(logFile) // e.g. "filename_error.log"
 		errorLogPath := filepath.Join(logDir, errorFilename)
-		errorFile, err := os.OpenFile(errorLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			panic(fmt.Sprintf("failed to open error log file %q: %v", errorLogPath, err))
+		errorLogger := &lumberjack.Logger{
+			Filename:   errorLogPath,
+			MaxSize:    10, // 10MB per file
+			MaxBackups: 3,  // Keep 3 rotated files
+			MaxAge:     30, // Keep logs for 30 days (adjustable)
+			Compress:   true,
 		}
 
-		// Add the ErrorHook that writes to errorFile
-		l.AddHook(&ErrorHook{writer: errorFile})
+		// Add the ErrorHook that writes only error+ logs to errorLogger
+		l.AddHook(&ErrorHook{writer: errorLogger})
 	}
 
 	// Parse log level
