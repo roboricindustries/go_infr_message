@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -18,32 +19,32 @@ type JSONFormatter struct{}
 // Format ensures logs match this JSON structure:
 // {"time":"2025-01-22T12:00:00.000Z","level":"INFO","line":34,"msg":"Application started"}
 func (f *JSONFormatter) Format(entry *logrus.Entry) ([]byte, error) {
-	timestamp := entry.Time.UTC().Format(time.RFC3339Nano)
-	level := strings.ToUpper(entry.Level.String())
+	// Prepare a map for all the log fields.
+	logMap := make(map[string]interface{})
 
-	line := 0
+	// Standard fields
+	logMap["time"] = entry.Time.UTC().Format(time.RFC3339Nano)
+	logMap["level"] = entry.Level.String() // You can uppercase if you wish
+	logMap["msg"] = entry.Message
+
+	// If caller info is available, add the line number.
 	if entry.HasCaller() {
-		line = entry.Caller.Line
+		logMap["line"] = entry.Caller.Line
 	}
 
-	msg := escapeString(entry.Message)
-	// Build base JSON
-	logLine := fmt.Sprintf(`{"time":"%s","level":"%s","line":%d,"msg":"%s"`,
-		timestamp, level, line, msg,
-	)
-
-	// Include extra fields from entry.Data (like latency, client_ip, etc.)
+	// Add all extra fields.
 	for k, v := range entry.Data {
-		logLine += fmt.Sprintf(`,"%s":"%v"`, k, v)
+		logMap[k] = v
 	}
 
-	// Close the JSON object
-	logLine += "}\n"
-	return []byte(logLine), nil
-}
+	// Marshal the map to JSON.
+	serialized, err := json.Marshal(logMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal fields to JSON, %v", err)
+	}
 
-func escapeString(s string) string {
-	return strings.ReplaceAll(s, `"`, `\"`)
+	// Append a newline for readability.
+	return append(serialized, '\n'), nil
 }
 
 // ErrorHook is a custom Logrus hook that writes only error-level (and above) logs
