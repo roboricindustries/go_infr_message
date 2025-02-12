@@ -23,7 +23,7 @@ type UnstricMessage struct {
 }
 type MessageContext struct {
 	ClientID   uint `json:"client_id"`
-	CompanyID  uint `json:"company_id"`
+	FirmID     uint `json:"firm_id"`
 	InstanceID uint `json:"instance_id"`
 }
 type SendingMessageBody struct {
